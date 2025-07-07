@@ -41,7 +41,7 @@ if [ "$SKIP_PREREQS" = false ]; then
     https://github.com/cyberark/conjur-cli-go/releases/download/v8.1.1/conjur-cli-go_8.1.1_amd64.deb
   sudo dpkg -i conjur-cli.deb
 else
-  echo "⚠️  Skipping prerequisite install (user requested --skip-prereqs)"
+  echo "WARNING: Skipping prerequisite install (user requested --skip-prereqs)"
 fi
 
 
@@ -83,12 +83,12 @@ AUTHNS='authn-k8s/dev-cluster\,authn'        # comma must be escaped for Helm
 DATA_KEY=$(docker run --rm cyberark/conjur data-key generate)
 
 if helm -n "$NAMESPACE" ls | grep -q "^${RELEASE}\b"; then
-  echo "👉 Helm release '$RELEASE' already exists - upgrading in place"
+  echo "Helm release '$RELEASE' already exists - upgrading in place"
   helm upgrade "$RELEASE" cyberark/conjur-oss \
     --namespace "$NAMESPACE" --reuse-values \
     --set "authenticators=${AUTHNS}"
 else
-  echo "👉 Installing Conjur OSS"
+  echo "Installing Conjur OSS"
   helm install "$RELEASE" cyberark/conjur-oss \
     --namespace "$NAMESPACE" --create-namespace \
     --set "dataKey=${DATA_KEY}" \
@@ -113,7 +113,7 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 # where the Conjur pod is queried for the admin user's key.
 echo "2 b. Ensure we have a valid admin API-key"
 
-# Identify the Conjur pod we’ll exec into
+# Identify the Conjur pod we'll exec into
 POD=$(kubectl -n conjur-system get pod -l app=conjur-oss \
               -o jsonpath='{.items[0].metadata.name}')
 
@@ -125,7 +125,7 @@ ADMIN_API_KEY=$(
     conjurctl role retrieve-key demo:user:admin 2>/dev/null | tail -1
 )
 
-# Second attempt (only if ➋ failed): create the account once and
+# Second attempt (only if the first attempt failed): create the account once and
 #    capture the new admin key. This runs only the first time.
 if [[ -z "$ADMIN_API_KEY" ]]; then
   ADMIN_API_KEY=$(
@@ -134,9 +134,9 @@ if [[ -z "$ADMIN_API_KEY" ]]; then
       awk '/API key for admin:/ {print $NF}'
   )
 fi
-set -e   # restore “exit on error” behaviour
+set -e   # restore 'exit on error' behaviour
 
-# Safety check: if we *still* don’t have a key, bail out early.
+# Safety check: if we *still* don't have a key, bail out early.
 if [[ -z "$ADMIN_API_KEY" ]]; then
   echo "ERROR: could not obtain Conjur admin API-key; aborting." >&2
   exit 1
@@ -153,13 +153,13 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 # (see lines 92-99) which set up temporary access to Conjur.
 echo "3. Expose Conjur locally and log in with CLI (hostname = conjur.myorg.com)"
 
-# ── 3-a. Ensure /etc/hosts maps conjur.myorg.com → 127.0.0.1 ────────────────
+# -- 3-a. Ensure /etc/hosts maps conjur.myorg.com -> 127.0.0.1 --
 if ! grep -qE '^\s*127\.0\.0\.1\s+conjur\.myorg\.com' /etc/hosts; then
-  echo "Adding conjur.myorg.com → 127.0.0.1 mapping"
+  echo "Adding conjur.myorg.com -> 127.0.0.1 mapping"
   echo "127.0.0.1  conjur.myorg.com" | sudo tee -a /etc/hosts
 fi
 
-# ── 3-b. (Re)start the port-forward, killing any stale one first ────────────
+# -- 3-b. (Re)start the port-forward, killing any stale one first --
 PF_PID=$(pgrep -f "kubectl .*8443:443") || true
 if [[ -n "${PF_PID:-}" ]]; then
   echo "Stopping existing port-forward (PID $PF_PID)"
@@ -169,18 +169,18 @@ fi
 kubectl -n conjur-system port-forward svc/conjur-oss 8443:443 >/dev/null 2>&1 &
 sleep 3   # give kubectl a moment to connect
 
-# ── 3-c. (Re)init the CLI so it uses the SAN on the cert ────────────────────
+# -- 3-c. (Re)init the CLI so it uses the SAN on the cert --
 conjur init --force \
   -u https://conjur.myorg.com:8443 \
   -a demo \
   --self-signed
 
-# ── 3-d. Login using the admin API key ──────────────────────────────────────
+# -- 3-d. Login using the admin API key --
 if ! conjur login -i admin -p "$ADMIN_API_KEY"; then
   echo "ERROR: Conjur login failed - please verify ADMIN_API_KEY" >&2
   exit 1
 fi
-echo "✅  Conjur CLI authenticated as admin"
+echo "Conjur CLI authenticated as admin"
 
 
 ###############################################################################
@@ -205,24 +205,16 @@ POLICY
 
 conjur policy load -b root -f k8s-authn.yml
 
-###############################################################################
-# 5. Kubernetes resources for Conjur authentication
-###############################################################################
-# See **kubernetes/test-app-conjur-authenticator-role-binding.yml** for the
-# original RBAC manifests this step corresponds to.
-
-
-# ###############################################################################
-# 6. Store cluster details in Conjur variables  (token & audience aligned)
+# 5. Store cluster details in Conjur variables  (token & audience aligned)
 # ###############################################################################
 # Sets Conjur variables similar to the logic in **policy/load_policies.sh**
 # (see lines 30-63) where database credentials are populated.
 # ensure workload namespace exists before we mint its JWT
 kubectl create namespace app-ns 2>/dev/null || true
 
-echo "6. Store cluster details in Conjur variables"
+echo "5. Store cluster details in Conjur variables"
 
-AUDIENCE=kubernetes.default.svc                      # ← must match URL later
+AUDIENCE=kubernetes.default.svc                      # must match URL later
 SA_JWT=$(kubectl -n app-ns create token default \
                  --audience="$AUDIENCE")
 
@@ -237,11 +229,11 @@ conjur variable set -i conjur/authn-k8s/dev-cluster/service-account-token -v "$S
 
 
 ###############################################################################
-# 7. Application policy and secret
+# 6. Application policy and secret
 ###############################################################################
 # Based on the policy definitions generated in **policy/load_policies.sh** and
 # templates under **policy/templates/** such as *app-identity-def.template.yml*.
-echo "7. Application policy and secret"
+echo "6. Application policy and secret"
 
 cat > app-policy.yml <<'POLICY'
 - !policy
@@ -264,16 +256,16 @@ conjur policy load -b root -f grant-app-host.yml
 conjur variable set -i app/db/creds/url -v 'postgres://localhost'
 
 ###############################################################################
-# 8. Install / upgrade Conjur Secrets Provider (Job mode) - idempotent
+# 7. Install / upgrade Conjur Secrets Provider (Job mode) - idempotent
 ###############################################################################
 # This step is unique to this script; the repo's other automation deploys
 # different demo apps but does not use the Secrets Provider helm chart.
-echo "8. Install / upgrade Conjur Secrets Provider"
+echo "7. Install / upgrade Conjur Secrets Provider"
 
 RELEASE=conjur-secrets-provider
 NS=app-ns
 
-# 8-a.  Stub Secret so the Job has a target to populate
+# 7-a.  Stub Secret so the Job has a target to populate
 kubectl -n "$NS" apply -f - <<'EOF'
 apiVersion: v1
 kind: Secret
@@ -286,17 +278,17 @@ stringData:
     app/db/creds/url: url
 EOF
 
-# 8-b.  Extract Conjur’s TLS cert for the Helm value
+# 7-b.  Extract Conjur's TLS cert for the Helm value
 TLS_SECRET=$(kubectl -n conjur-system get secret -o jsonpath='{range .items[*]}{@.metadata.name}{"\n"}{end}' |
              grep -E 'conjur-oss-conjur-ssl-(ca-)?cert' | head -1)
 
 kubectl -n conjur-system get secret "$TLS_SECRET" \
   -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/conjur_ca.pem
 
-# 8-c.  Remove any previous Job (avoids immutable-field errors)
+# 7-c.  Remove any previous Job (avoids immutable-field errors)
 helm -n "$NS" uninstall "$RELEASE" --wait 2>/dev/null || true
 
-# 8-d.  Install
+# 7-d.  Install
 helm install "$RELEASE" cyberark/secrets-provider \
   --namespace "$NS" --create-namespace \
   --set environment.k8sSecrets[0]=app-secrets \
@@ -309,16 +301,16 @@ helm install "$RELEASE" cyberark/secrets-provider \
   --set serviceAccount.create=false \
   --set serviceAccount.name=default
 
-# 8-e.  Wait for first sync
+# 7-e.  Wait for first sync
 kubectl -n "$NS" wait --for=condition=complete job/conjur-secrets-provider --timeout=180s
 
 
 ###############################################################################
-# 9. Demo pod that retrieves the secret
+# 8. Demo pod that retrieves the secret
 ###############################################################################
 # Similar to the verification logic in **8_app_verify_authentication.sh**, but
 # using a lightweight Alpine pod.
-echo "9. Demo pod that retrieves the secret"
+echo "8. Demo pod that retrieves the secret"
 cat > demo.yml <<'POD'
 apiVersion: v1
 kind: Pod
