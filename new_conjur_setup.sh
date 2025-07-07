@@ -16,6 +16,8 @@ done
 ###############################################################################
 # 0. Prerequisites (kubectl v1.30.0, kind v0.23.0, Helm, Conjur CLI v8.1.1)
 ###############################################################################
+# Inspired by the tooling installation steps in **ci/Dockerfile**
+# (see lines 6-33) which install kubectl, Helm and other dependencies.
 if [ "$SKIP_PREREQS" = false ]; then
   sudo apt-get update -y
   sudo apt-get install -y curl jq ca-certificates gnupg lsb-release
@@ -46,6 +48,8 @@ fi
 ###############################################################################
 # 1. Spin up - or reuse - a Kind cluster
 ###############################################################################
+# Simplified alternative to the Kubernetes cluster setup performed in
+# **ci/test** during automated testing.
 if [ "$SKIP_PREREQS" = false ]; then
   echo "1. Spin up - or reuse - a Kind cluster"
   CLUSTER=conjur-poc
@@ -66,6 +70,8 @@ fi   # <--- add this
 ###############################################################################
 # 2. Install (or reuse) Conjur OSS with authenticator enabled
 ###############################################################################
+# Adapted from the Helm install logic in **ci/test** (see lines 132-153)
+# that deploy Conjur OSS and retrieve the admin API key.
 echo "2. Install (or reuse) Conjur OSS with authenticator enabled"
 
 helm repo add cyberark https://cyberark.github.io/helm-charts
@@ -103,6 +109,8 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 ###############################################################################
 # 2 b. Ensure we have a valid admin API-key
 ###############################################################################
+# Mirrors the admin API-key retrieval in **ci/test** around lines 156-163
+# where the Conjur pod is queried for the admin user's key.
 echo "2 b. Ensure we have a valid admin API-key"
 
 # Identify the Conjur pod we’ll exec into
@@ -141,6 +149,8 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 ###############################################################################
 # 3. Expose Conjur with a hostname that matches the TLS certificate & log in
 ###############################################################################
+# Port-forward and login flow adapted from **8_app_verify_authentication.sh**
+# (see lines 92-99) which set up temporary access to Conjur.
 echo "3. Expose Conjur locally and log in with CLI (hostname = conjur.myorg.com)"
 
 # ── 3-a. Ensure /etc/hosts maps conjur.myorg.com → 127.0.0.1 ────────────────
@@ -176,6 +186,7 @@ echo "✅  Conjur CLI authenticated as admin"
 ###############################################################################
 # 4. Define authn-k8s webservice (service-id: dev-cluster)
 ###############################################################################
+# Policy structure mirrors **policy/templates/cluster-authn-svc-def.template.yml**
 echo "4. Define authn-k8s webservice (service-id: dev-cluster)"
 cat > k8s-authn.yml <<'POLICY'
 - !policy
@@ -197,11 +208,15 @@ conjur policy load -b root -f k8s-authn.yml
 ###############################################################################
 # 5. Kubernetes resources for Conjur authentication
 ###############################################################################
+# See **kubernetes/test-app-conjur-authenticator-role-binding.yml** for the
+# original RBAC manifests this step corresponds to.
 
 
-###############################################################################
+# ###############################################################################
 # 6. Store cluster details in Conjur variables  (token & audience aligned)
-###############################################################################
+# ###############################################################################
+# Sets Conjur variables similar to the logic in **policy/load_policies.sh**
+# (see lines 30-63) where database credentials are populated.
 # ensure workload namespace exists before we mint its JWT
 kubectl create namespace app-ns 2>/dev/null || true
 
@@ -224,6 +239,8 @@ conjur variable set -i conjur/authn-k8s/dev-cluster/service-account-token -v "$S
 ###############################################################################
 # 7. Application policy and secret
 ###############################################################################
+# Based on the policy definitions generated in **policy/load_policies.sh** and
+# templates under **policy/templates/** such as *app-identity-def.template.yml*.
 echo "7. Application policy and secret"
 
 cat > app-policy.yml <<'POLICY'
@@ -249,6 +266,8 @@ conjur variable set -i app/db/creds/url -v 'postgres://localhost'
 ###############################################################################
 # 8. Install / upgrade Conjur Secrets Provider (Job mode) - idempotent
 ###############################################################################
+# This step is unique to this script; the repo's other automation deploys
+# different demo apps but does not use the Secrets Provider helm chart.
 echo "8. Install / upgrade Conjur Secrets Provider"
 
 RELEASE=conjur-secrets-provider
@@ -297,6 +316,8 @@ kubectl -n "$NS" wait --for=condition=complete job/conjur-secrets-provider --tim
 ###############################################################################
 # 9. Demo pod that retrieves the secret
 ###############################################################################
+# Similar to the verification logic in **8_app_verify_authentication.sh**, but
+# using a lightweight Alpine pod.
 echo "9. Demo pod that retrieves the secret"
 cat > demo.yml <<'POD'
 apiVersion: v1
