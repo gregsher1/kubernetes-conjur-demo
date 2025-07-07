@@ -15,6 +15,7 @@ done
 
 ###############################################################################
 # 0. Prerequisites (kubectl v1.30.0, kind v0.23.0, Helm, Conjur CLI v8.1.1)
+# Inspired by dependency setup in ci/Dockerfile lines 7-33
 ###############################################################################
 if [ "$SKIP_PREREQS" = false ]; then
   sudo apt-get update -y
@@ -45,6 +46,7 @@ fi
 
 ###############################################################################
 # 1. Spin up – or reuse – a Kind cluster
+# Custom to this script; the repo assumes a cluster already exists
 ###############################################################################
 echo "1. Spin up – or reuse – a Kind cluster"
 CLUSTER=conjur-poc
@@ -62,6 +64,7 @@ kubectl cluster-info --context "kind-${CLUSTER}"
 
 ###############################################################################
 # 2. Install (or reuse) Conjur OSS with authenticator enabled
+# Based on the helm install logic in ci/test lines 151-171
 ###############################################################################
 echo "2. Install (or reuse) Conjur OSS with authenticator enabled"
 
@@ -99,6 +102,7 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 
 ###############################################################################
 # 2 b. Ensure we have a valid admin API-key
+# Logic derived from ci/test lines 156-163 for retrieving admin key
 ###############################################################################
 echo "2 b. Ensure we have a valid admin API-key"
 
@@ -137,6 +141,7 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 
 ###############################################################################
 # 3. Expose Conjur with a hostname that matches the TLS certificate & log in
+# Port-forward approach similar to 8_app_verify_authentication.sh lines 90-106
 ###############################################################################
 echo "3. Expose Conjur locally and log in with CLI (hostname = conjur.myorg.com)"
 
@@ -172,6 +177,7 @@ echo "✅  Conjur CLI authenticated as admin"
 
 ###############################################################################
 # 4. Define authn-k8s webservice (service-id: dev-cluster)
+# Simplified from policy/templates/cluster-authn-svc-def.template.yml lines 1-22
 ###############################################################################
 echo "4. Define authn-k8s webservice (service-id: dev-cluster)"
 cat > k8s-authn.yml <<'POLICY'
@@ -193,6 +199,7 @@ conjur policy load -b root -f k8s-authn.yml
 
 ###############################################################################
 # 5. Kubernetes resources for Conjur authentication
+# Similar to kubernetes/test-app-conjur-authenticator-role-binding.yml lines 1-14
 ###############################################################################
 echo "5. Kubernetes resources for Conjur authentication"
 cat <<'MANIFEST' | kubectl apply -f -
@@ -223,6 +230,7 @@ MANIFEST
 
 ###############################################################################
 # 6. Store cluster details in Conjur variables
+# Populates variables defined in the cluster-authn policy template
 ###############################################################################
 echo "6. Store cluster details in Conjur variables"
 SA_JWT=$(kubectl -n conjur-authn create token authn-k8s-sa)
@@ -235,6 +243,7 @@ conjur variable set -i conjur/authn-k8s/dev-cluster/service-account-token -v "$S
 
 ###############################################################################
 # 7. Application policy and secret
+# Inspired by policy/templates/app-identity-def.template.yml
 ###############################################################################
 echo "7. Application policy and secret"
 kubectl create namespace app-ns || true
@@ -261,6 +270,7 @@ conjur variable set -i app/db/creds/url -v 'postgres://localhost'
 
 ###############################################################################
 # 8. Install Conjur authn-k8s client sidecar injector
+# See README.md lines 40-47 for sidecar client background
 ###############################################################################
 echo "8. Install Conjur authn-k8s client sidecar injector"
 helm repo add cyberark https://cyberark.github.io/helm-charts
@@ -277,6 +287,7 @@ helm install conjur-authn-client cyberark/conjur-authn-k8s-client \
 
 ###############################################################################
 # 9. Demo pod that retrieves the secret
+# Adapted from verification logic in 8_app_verify_authentication.sh lines 132-178
 ###############################################################################
 echo "9. Demo pod that retrieves the secret"
 cat > demo.yml <<'POD'
@@ -302,5 +313,6 @@ kubectl -n app-ns exec demo -- cat /conjur/secrets/db/creds/url
 
 ###############################################################################
 # 10. Cleanup (optional)
+# Similar to the cleanup logic in stop script
 ###############################################################################
 # kind delete cluster --name conjur-poc
