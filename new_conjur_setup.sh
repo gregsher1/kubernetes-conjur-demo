@@ -15,7 +15,6 @@ done
 
 ###############################################################################
 # 0. Prerequisites (kubectl v1.30.0, kind v0.23.0, Helm, Conjur CLI v8.1.1)
-# Inspired by dependency setup in ci/Dockerfile lines 7-33
 ###############################################################################
 if [ "$SKIP_PREREQS" = false ]; then
   sudo apt-get update -y
@@ -45,26 +44,27 @@ fi
 
 
 ###############################################################################
-# 1. Spin up – or reuse – a Kind cluster
-# Custom to this script; the repo assumes a cluster already exists
+# 1. Spin up - or reuse - a Kind cluster
 ###############################################################################
-echo "1. Spin up – or reuse – a Kind cluster"
-CLUSTER=conjur-poc
-K8S_VERSION=v1.30.0        # keep the version you’re already using
+if [ "$SKIP_PREREQS" = false ]; then
+  echo "1. Spin up - or reuse - a Kind cluster"
+  CLUSTER=conjur-poc
+  K8S_VERSION=v1.30.0
 
-if kind get clusters | grep -qx "$CLUSTER"; then
-  echo "Kind cluster '$CLUSTER' already exists – re-using it"
-else
-  echo "Creating Kind cluster '$CLUSTER'"
-  kind create cluster --name "$CLUSTER" --image "kindest/node:${K8S_VERSION}"
-fi
+  if kind get clusters | grep -qx "$CLUSTER"; then
+    echo "Kind cluster '$CLUSTER' already exists - re-using it"
+  else
+    echo "Creating Kind cluster '$CLUSTER'"
+    kind create cluster --name "$CLUSTER" --image "kindest/node:${K8S_VERSION}"
+  fi
 
-kubectl cluster-info --context "kind-${CLUSTER}"
+  kubectl cluster-info --context "kind-${CLUSTER}"
+fi   # <--- add this
+
 
 
 ###############################################################################
 # 2. Install (or reuse) Conjur OSS with authenticator enabled
-# Based on the helm install logic in ci/test lines 151-171
 ###############################################################################
 echo "2. Install (or reuse) Conjur OSS with authenticator enabled"
 
@@ -77,7 +77,7 @@ AUTHNS='authn-k8s/dev-cluster\,authn'        # comma must be escaped for Helm
 DATA_KEY=$(docker run --rm cyberark/conjur data-key generate)
 
 if helm -n "$NAMESPACE" ls | grep -q "^${RELEASE}\b"; then
-  echo "👉 Helm release '$RELEASE' already exists – upgrading in place"
+  echo "👉 Helm release '$RELEASE' already exists - upgrading in place"
   helm upgrade "$RELEASE" cyberark/conjur-oss \
     --namespace "$NAMESPACE" --reuse-values \
     --set "authenticators=${AUTHNS}"
@@ -102,7 +102,6 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 
 ###############################################################################
 # 2 b. Ensure we have a valid admin API-key
-# Logic derived from ci/test lines 156-163 for retrieving admin key
 ###############################################################################
 echo "2 b. Ensure we have a valid admin API-key"
 
@@ -141,7 +140,6 @@ echo "$ADMIN_API_KEY" > /tmp/conjur_admin.key
 
 ###############################################################################
 # 3. Expose Conjur with a hostname that matches the TLS certificate & log in
-# Port-forward approach similar to 8_app_verify_authentication.sh lines 90-106
 ###############################################################################
 echo "3. Expose Conjur locally and log in with CLI (hostname = conjur.myorg.com)"
 
@@ -169,7 +167,7 @@ conjur init --force \
 
 # ── 3-d. Login using the admin API key ──────────────────────────────────────
 if ! conjur login -i admin -p "$ADMIN_API_KEY"; then
-  echo "ERROR: Conjur login failed – please verify ADMIN_API_KEY" >&2
+  echo "ERROR: Conjur login failed - please verify ADMIN_API_KEY" >&2
   exit 1
 fi
 echo "✅  Conjur CLI authenticated as admin"
@@ -177,7 +175,6 @@ echo "✅  Conjur CLI authenticated as admin"
 
 ###############################################################################
 # 4. Define authn-k8s webservice (service-id: dev-cluster)
-# Simplified from policy/templates/cluster-authn-svc-def.template.yml lines 1-22
 ###############################################################################
 echo "4. Define authn-k8s webservice (service-id: dev-cluster)"
 cat > k8s-authn.yml <<'POLICY'
@@ -199,54 +196,35 @@ conjur policy load -b root -f k8s-authn.yml
 
 ###############################################################################
 # 5. Kubernetes resources for Conjur authentication
-# Similar to kubernetes/test-app-conjur-authenticator-role-binding.yml lines 1-14
 ###############################################################################
-echo "5. Kubernetes resources for Conjur authentication"
-cat <<'MANIFEST' | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: conjur-authn
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: authn-k8s-sa
-  namespace: conjur-authn
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: conjur-authn-k8s
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
-subjects:
-- kind: ServiceAccount
-  name: authn-k8s-sa
-  namespace: conjur-authn
-MANIFEST
+
 
 ###############################################################################
-# 6. Store cluster details in Conjur variables
-# Populates variables defined in the cluster-authn policy template
+# 6. Store cluster details in Conjur variables  (token & audience aligned)
 ###############################################################################
+# ensure workload namespace exists before we mint its JWT
+kubectl create namespace app-ns 2>/dev/null || true
+
 echo "6. Store cluster details in Conjur variables"
-SA_JWT=$(kubectl -n conjur-authn create token authn-k8s-sa)
-API_URL=$(kubectl config view --raw --minify --flatten -o jsonpath='{.clusters[].cluster.server}')
-CLUSTER_CA=$(kubectl config view --raw --minify --flatten -o jsonpath='{.clusters[].cluster.certificate-authority-data}' | base64 -d)
 
-conjur variable set -i conjur/authn-k8s/dev-cluster/api-url -v "$API_URL"
-conjur variable set -i conjur/authn-k8s/dev-cluster/ca-cert -v "$CLUSTER_CA"
+AUDIENCE=kubernetes.default.svc                      # ← must match URL later
+SA_JWT=$(kubectl -n app-ns create token default \
+                 --audience="$AUDIENCE")
+
+API_URL=$(kubectl config view --raw --minify --flatten \
+          -o jsonpath='{.clusters[].cluster.server}')
+CLUSTER_CA=$(kubectl config view --raw --minify --flatten \
+             -o jsonpath='{.clusters[].cluster.certificate-authority-data}' | base64 -d)
+
+conjur variable set -i conjur/authn-k8s/dev-cluster/api-url  -v "$API_URL"
+conjur variable set -i conjur/authn-k8s/dev-cluster/ca-cert  -v "$CLUSTER_CA"
 conjur variable set -i conjur/authn-k8s/dev-cluster/service-account-token -v "$SA_JWT"
+
 
 ###############################################################################
 # 7. Application policy and secret
-# Inspired by policy/templates/app-identity-def.template.yml
 ###############################################################################
 echo "7. Application policy and secret"
-kubectl create namespace app-ns || true
 
 cat > app-policy.yml <<'POLICY'
 - !policy
@@ -269,25 +247,55 @@ conjur policy load -b root -f grant-app-host.yml
 conjur variable set -i app/db/creds/url -v 'postgres://localhost'
 
 ###############################################################################
-# 8. Install Conjur authn-k8s client sidecar injector
-# See README.md lines 40-47 for sidecar client background
+# 8. Install / upgrade Conjur Secrets Provider (Job mode) - idempotent
 ###############################################################################
-echo "8. Install Conjur authn-k8s client sidecar injector"
-helm repo add cyberark https://cyberark.github.io/helm-charts
-helm repo update
+echo "8. Install / upgrade Conjur Secrets Provider"
 
-helm install conjur-authn-client cyberark/conjur-authn-k8s-client \
-  --namespace app-ns \
-  --set conjur.account=demo \
-  --set conjur.applianceURL=https://conjur-oss.conjur-system.svc.cluster.local \
-  --set conjur.authenticatorID=dev-cluster \
-  --set conjur.sslCA.cert="$CLUSTER_CA" \
-  --set appServiceAccount.name=default \
-  --set appServiceAccount.create=false
+RELEASE=conjur-secrets-provider
+NS=app-ns
+
+# 8-a.  Stub Secret so the Job has a target to populate
+kubectl -n "$NS" apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: app-ns
+type: Opaque
+stringData:
+  conjur-map: |
+    app/db/creds/url: url
+EOF
+
+# 8-b.  Extract Conjur’s TLS cert for the Helm value
+TLS_SECRET=$(kubectl -n conjur-system get secret -o jsonpath='{range .items[*]}{@.metadata.name}{"\n"}{end}' |
+             grep -E 'conjur-oss-conjur-ssl-(ca-)?cert' | head -1)
+
+kubectl -n conjur-system get secret "$TLS_SECRET" \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/conjur_ca.pem
+
+# 8-c.  Remove any previous Job (avoids immutable-field errors)
+helm -n "$NS" uninstall "$RELEASE" --wait 2>/dev/null || true
+
+# 8-d.  Install
+helm install "$RELEASE" cyberark/secrets-provider \
+  --namespace "$NS" --create-namespace \
+  --set environment.k8sSecrets[0]=app-secrets \
+  --set environment.conjur.account=demo \
+  --set environment.conjur.applianceUrl=https://conjur-oss.conjur-system.svc.cluster.local \
+  --set environment.conjur.authnUrl="https://conjur-oss.conjur-system.svc.cluster.local/authn-k8s/dev-cluster?audience=$AUDIENCE" \
+  --set-file environment.conjur.sslCertificate.value=/tmp/conjur_ca.pem \
+  --set environment.conjur.authnLogin=host/app/system:serviceaccount:app-ns:default \
+  --set rbac.create=true \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=default
+
+# 8-e.  Wait for first sync
+kubectl -n "$NS" wait --for=condition=complete job/conjur-secrets-provider --timeout=180s
+
 
 ###############################################################################
 # 9. Demo pod that retrieves the secret
-# Adapted from verification logic in 8_app_verify_authentication.sh lines 132-178
 ###############################################################################
 echo "9. Demo pod that retrieves the secret"
 cat > demo.yml <<'POD'
@@ -310,9 +318,3 @@ POD
 kubectl -n app-ns apply -f demo.yml
 kubectl -n app-ns wait pod/demo --for=condition=ready --timeout=120s
 kubectl -n app-ns exec demo -- cat /conjur/secrets/db/creds/url
-
-###############################################################################
-# 10. Cleanup (optional)
-# Similar to the cleanup logic in stop script
-###############################################################################
-# kind delete cluster --name conjur-poc
